@@ -144,22 +144,31 @@ function Agent:execute(chat, tools)
     if tool["function"].arguments then
       local args = tool["function"].arguments
       -- For some adapter's that aren't streaming, the args are strings rather than tables
-      if type(args) == "string" then
-        local decoded
-        xpcall(function()
-          decoded = vim.json.decode(args)
-        end, function(err)
-          log:error("Couldn't decode the tool arguments: %s", args)
-          self.chat:add_tool_output(
-            self.tool,
-            string.format('You made an error in calling the %s tool: "%s"', name, err),
-            string.format("**%s Tool Error**: %s", util.capitalize(name), err)
-          )
-          return util.fire("AgentFinished", { bufnr = self.bufnr })
-        end)
-        args = decoded
+    if type(args) == "string" then
+      -- first attempt: direct parse
+      local ok, decoded = pcall(vim.json.decode, args)
+
+      -- second attempt: trim ONE trailing unmatched “}” and try again
+      fixed = ""
+      if not ok then
+        fixed = args:gsub("}%s*$", "")   -- removes a single final `}` if present
+        ok, decoded = pcall(vim.json.decode, fixed)
       end
-      self.tool.args = args
+
+      if ok and decoded then
+        args = decoded
+      else
+        -- original error handling path -----------------------------
+        log:error("Couldn't decode the tool arguments: %s even with attempt: %s", args, fixed)
+        self.chat:add_tool_output(
+          self.tool,
+          string.format('You made an error in calling the %s tool: "%s"', name, "invalid JSON"),
+          string.format("**%s Tool Error**: %s", util.capitalize(name), "invalid JSON")
+        )
+        return util.fire("AgentFinished", { bufnr = self.bufnr })
+      end
+    end 
+    self.tool.args = args
     end
     self.tool.opts = vim.tbl_extend("force", self.tool.opts or {}, tool_config.opts or {})
 
